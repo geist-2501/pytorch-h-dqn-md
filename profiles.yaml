@@ -1,0 +1,215 @@
+---
+defaults:
+  timesteps_per_epoch: 1
+  batch_size: 32
+  total_steps :  500000
+  decay_steps: 5000
+  learning_rate: 1e-4
+  init_epsilon: 1
+  final_epsilon: 0.1
+  refresh_target_network_freq: 100
+  eval_freq: 5000
+  gather_freq: 50
+  replay_buffer_size: 10000
+  episode_max_timesteps: 1500
+  grad_clip: 1
+  q1_loss: 'td'
+  q2_loss: 'td'
+
+k_catch_up_disabled_test_map_0:
+  agent_id: FM-HDQN
+  env_id: FMMulti-v0
+  env_wrapper: FMRel
+  env_args:
+    map_id: '0'
+  config:
+    # k_catch_up: 10000
+    q1_decay_steps: 28000
+    pretrain_steps: 30000
+    q2_decay_steps: 380000
+    train_steps: 400000
+    replay_buffer_size: 10000
+    batch_size: 128
+    q1_hidden_layers:
+      - 128
+      - 64
+    q2_hidden_layers:
+      - 128
+      - 64
+    refresh_target_network_freq: 1000
+
+final_dqn_map_0:
+  agent_id: DQN
+  env_id: FMMulti-v0
+  env_wrapper: FMFlattenRel
+  env_args:
+    map_id: '0'
+  config:
+    total_steps :  200000
+    decay_steps :  190000
+    replay_buffer_size: 10000
+    batch_size: 128
+    refresh_target_network_freq :  1000
+    hidden_layers:
+      - 128
+      - 64
+
+final_dqn_map_1:
+  agent_id: DQN
+  env_id: FMMulti-v0
+  env_wrapper: FMFlattenRel
+  env_args:
+    map_id: '1'
+  config:
+    total_steps :  500000
+    decay_steps :  480000
+    replay_buffer_size: 25000
+    batch_size: 128
+    refresh_target_network_freq :  1000
+    hidden_layers:
+      - 128
+      - 64
+
+final_dqn_map_2:
+  agent_id: DQN
+  env_id: FMMulti-v0
+  env_wrapper: FMFlattenRel
+  env_args:
+    map_id: '2'
+  config:
+    total_steps: 1000000
+    decay_steps:  900000
+    replay_buffer_size: 50000
+    batch_size: 128
+    refresh_target_network_freq: 2500
+    hidden_layers:
+      - 128
+      - 64
+
+final_dqn_map_3:
+  agent_id: DQN
+  env_id: FMMulti-v0
+  env_wrapper: FMFlattenRel
+  env_args:
+    map_id: '3'
+  config:
+    total_steps :  5000000
+    decay_steps :  4800000
+    replay_buffer_size: 80000
+    batch_size: 128
+    refresh_target_network_freq :  5000
+    hidden_layers:
+      - 258
+      - 128
+
+final_hdqn_map_0:
+  agent_id: FM-HDQN
+  env_id: FMMulti-v0
+  env_wrapper: FMRel
+  env_args:
+    map_id: '0'
+  config:
+    k_catch_up: 10000
+    q1_decay_steps: 28000
+    pretrain_steps: 30000
+    q2_decay_steps: 380000
+    train_steps:    400000
+    replay_buffer_size: 10000
+    batch_size: 128
+    q1_hidden_layers:
+      - 128
+      - 64
+    q2_hidden_layers:
+      - 128
+      - 64
+    refresh_target_network_freq: 1000
+
+final_hdqn_map_1:
+  agent_id: FM-HDQN
+  env_id: FMMulti-v0
+  env_wrapper: FMRel
+  env_args:
+    map_id: '1'
+  config:
+    k_catch_up: 10000
+    q1_decay_steps: 28000
+    pretrain_steps: 30000
+    q2_decay_steps: 380000
+    train_steps:    400000
+    replay_buffer_size: 25000
+    batch_size: 128
+    q1_hidden_layers:
+      - 128
+      - 64
+    q2_hidden_layers:
+      - 128
+      - 64
+    refresh_target_network_freq: 1000
+
+final_hdqn_map_2:
+  agent_id: FM-HDQN
+  env_id: FMMulti-v0
+  env_wrapper: FMRel
+  env_args:
+    map_id: '2'
+  config:
+    k_catch_up: 10000
+    q1_decay_steps:   90000
+    pretrain_steps:  100000
+    q2_decay_steps:  900000
+    train_steps:    1000000
+    replay_buffer_size: 50000
+    batch_size: 128
+    q1_hidden_layers:
+      - 128
+      - 64
+    q2_hidden_layers:
+      - 128
+      - 64
+    refresh_target_network_freq: 2500
+
+final_hdqn_map_alt_2:
+  agent_id: FM-HDQN
+  env_id: FMMulti-alt-v0
+  env_wrapper: FMRel
+  env_args:
+    map_id: '2'
+  config:
+    k_catch_up: 10000
+    q1_decay_steps:   90000
+    pretrain_steps:  100000
+    q2_decay_steps:  900000
+    train_steps:    1000000
+    replay_buffer_size: 50000
+    batch_size: 128
+    q1_hidden_layers:
+      - 128
+      - 64
+    q2_hidden_layers:
+      - 128
+      - 64
+    refresh_target_network_freq: 2500
+    q2_loss: 'td-delta'
+
+
+final_hdqn_map_3:
+  agent_id: FM-HDQN
+  env_id: FMMulti-v0
+  env_wrapper: FMRel
+  env_args:
+    map_id: '3'
+  config:
+    k_catch_up: 10000
+    q1_decay_steps:  290000
+    pretrain_steps:  300000
+    q2_decay_steps: 1900000
+    train_steps:    2000000
+    replay_buffer_size: 80000
+    batch_size: 128
+    q1_hidden_layers:
+      - 128
+      - 128
+    q2_hidden_layers:
+      - 128
+      - 128
+    refresh_target_network_freq: 5000
