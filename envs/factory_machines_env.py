@@ -1,16 +1,16 @@
-from typing import Optional, Union, List, Tuple, Dict
-from abc import ABC, abstractmethod
+import math
+from typing import Dict, Optional, Union, List, Tuple
 
-import gym
+import gymnasium as gym
 import numpy as np
 import pygame
-from gym import spaces
-from gym.core import RenderFrame, ActType, ObsType
+from crete import get_cli_state
+from gymnasium.core import RenderFrame, ActType, ObsType
+from gymnasium.vector.utils import spaces
 
-from factory_machines.envs.pygame_utils import History
-from factory_machines.envs.route_tracer import RouteTracer
-from factory_machines.envs.warehouse import Map
-from talos import get_cli_state
+from envs.order_generators import GaussianOrderGenerator
+from envs.pygame_utils import History, draw_lines
+from envs.warehouse import Map, warehouses
 
 
 def _opt_bool(opt: Union[str, bool]) -> bool:
@@ -20,78 +20,21 @@ def _opt_bool(opt: Union[str, bool]) -> bool:
         return opt
 
 
-class FactoryMachinesEnvBase(gym.Env, ABC):
+class FactoryMachinesEnv(gym.Env):
+    _reward_per_order = 10  # The amount of reward for a fulfilled order.
+    _item_pickup_reward = 1  # The amount of reward for picking up a needed item.
+    _item_dropoff_reward = 0  # The amount of reward for dropping off a needed item.
+    _item_pickup_punishment = -2  # The amount of reward for picking up an item it shouldn't.
+    _collision_punishment = -1
+    _timestep_punishment = -0.5
+    _episode_reward = 100
+
+    _age_bands = 3  # The number of stages of 'oldness'.
+    _max_age_reward = 3  # The max reward that can be gained from an early order completion.
+    _age_max_timesteps = 50  # The amount of timesteps that can elapse before an order is considered old.
+
     metadata = {"render_modes": ["rgb_array", "human"], "render_fps": 4}
-    maps: Dict[str, Map] = {
-        "0": Map([
-            'o.d',
-            '...',
-            'd.d',
-        ],
-            [0.1, 0.2, 0.6],
-            3
-        ),
-        "0-longer": Map([
-            'o.d.d',
-            '.....',
-            'd.d.d',
-        ],
-            [1, 1, 1, 1, 1],
-            3
-        ),
-        "1": Map([
-            'o.w.d',
-            '..w..',
-            '.....',
-            'd...d',
-        ],
-            [1, 1, 1],
-            3
-        ),
-        "2": Map([
-            '...o...',
-            '.d...d.',
-            '.d.w.d.',
-            '.d...d.',
-            '.......',
-        ],
-            [0.2, 0.1, 0.5, 0.3, 0.2, 0.3],
-            4
-        ),
-        "3": Map([
-            '....o....',
-            '.........',
-            '.dwd.dwd.',
-            '.dwd.dwd.',
-            '.dwd.dwd.',
-            '.dwd.dwd.',
-            '.dwd.dwd.',
-            '.........',
-            '.........',
-        ],
-            [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-            5
-        ),
-        "slam-example": Map([
-            '....o.ww.',
-            'd.ww.....',
-            'wwwwwww..',
-            '....d....',
-        ],
-            [1, 2],
-            2
-        ),
-        "aisled-example": Map([
-            '...o...',
-            'dwd.dwd',
-            'dwd.dwd',
-            'dwd.dwd',
-            '.......',
-        ],
-            [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-            3
-        ),
-    }
+    maps: Dict[str, Map] = warehouses
 
     colors = {
         'background': (255, 255, 255),
@@ -104,18 +47,13 @@ class FactoryMachinesEnvBase(gym.Env, ABC):
         "black": (0, 0, 0)
     }
 
-    _item_pickup_reward = 1
-    _item_pickup_punishment = -0.5
-    _item_dropoff_reward = 1
-    _collision_punishment = -0.1
-    _timestep_punishment = -0.1
-
     up, left, down, right, grab = range(5)
 
     def __init__(
             self,
             render_mode: Optional[str] = None,
             map_id="0",
+            num_orders=10,
             agent_capacity=10,
             verbose=False,
             correct_obs=True
@@ -140,9 +78,17 @@ class FactoryMachinesEnvBase(gym.Env, ABC):
         self._agent_loc = np.array(self._output_loc, dtype=int)
         self._agent_inv = np.zeros(self._num_depots, dtype=int)
 
+        num_orders = int(num_orders)
+
+        self._total_num_orders = num_orders
+        self._num_orders_pending = num_orders
+        self._open_orders: List[Tuple[int, np.ndarray]] = []
+
         self._last_action = 0
 
         self._history = History(size=8)
+
+        self._order_generator = GaussianOrderGenerator(self._map.p, self._map.max_order_size)
 
         self.observation_space = spaces.Dict(
             {
@@ -150,8 +96,9 @@ class FactoryMachinesEnvBase(gym.Env, ABC):
                 "agent_obs": spaces.Box(0, 1, shape=(9,), dtype=int),
                 "agent_inv": spaces.Box(0, 10, shape=(len(self._depot_locs),), dtype=int),
                 "depot_locs": spaces.Box(0, max(self._len_x, self._len_y), shape=(len(self._depot_locs) * 2,), dtype=int),
-                "depot_queues": spaces.Box(0, 10, shape=(len(self._depot_locs),), dtype=int),
+                "depot_queues": spaces.Box(0, num_orders, shape=(len(self._depot_locs),), dtype=int),
                 "output_loc": spaces.Box(0, max(self._len_x, self._len_y), shape=(2,), dtype=int),
+                "depot_ages": spaces.Box(0, self._age_bands, shape=(len(self._depot_locs),), dtype=int),
             }
         )
 
@@ -171,37 +118,10 @@ class FactoryMachinesEnvBase(gym.Env, ABC):
         # Used for human friendly rendering.
         self.screen = None
         self.clock = None
-        self.route_tracer = RouteTracer()
 
         # Stats.
         self._dist_travelled = 0
         self._timestep = 0
-
-    def _get_obs(self):
-
-        local_obs = np.zeros((3, 3))
-
-        a_x, a_y = self._agent_loc
-        for x in range(3):
-            for y in range(3):
-                map_x = a_x + x - 1
-                map_y = a_y + y - 1
-                if self._is_oob(map_x, map_y) or self._map.layout[map_y][map_x] == 'w':
-                    local_obs[y, x] = 1
-
-        return {
-            "agent_loc": self._agent_loc,
-            "agent_obs": local_obs.flatten(),
-            "agent_inv": self._agent_inv,
-            "depot_locs": self._depot_locs.flatten(),
-            "depot_queues": self._get_depot_queues(),
-            "output_loc": self._output_loc,
-        }
-
-    @abstractmethod
-    def _get_depot_queues(self):
-        """Get the amount of items needed from each queue."""
-        pass
 
     def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None) -> Tuple[ObsType, dict]:
         super().reset(seed=seed, options=options)
@@ -217,8 +137,14 @@ class FactoryMachinesEnvBase(gym.Env, ABC):
 
         self._timestep = 0
         self._dist_travelled = 0
-        self.route_tracer = RouteTracer(k=20)
-        self.route_tracer.trace(self._agent_loc)
+
+        self._num_orders_pending = self._total_num_orders
+        self._open_orders = []
+
+        # Immediately create an open order.
+        self._num_orders_pending -= 1
+        order = self._order_generator.make_order(self._num_depots)
+        self._open_orders.append((self._timestep, order))
 
         return obs, {}
 
@@ -250,13 +176,22 @@ class FactoryMachinesEnvBase(gym.Env, ABC):
 
         reward = action_reward + drop_off_reward + self._timestep_punishment
 
+        # Process orders.
+        should_create_order = self._order_generator.should_make_order(len(self._open_orders))
+        if should_create_order and self._num_orders_pending > 0:
+            self._num_orders_pending -= 1
+            order = self._order_generator.make_order(self._num_depots)
+            self._open_orders.append((self._timestep, order))
+
+        terminated = self._num_orders_pending == 0 and len(self._open_orders) == 0
+        reward += self._episode_reward if terminated else 0
+
         obs = self._get_obs()
         info = {
             "timesteps": self._timestep,
             "distance": self._dist_travelled,
+            "orders per minute": self._get_num_completed_orders() / self._timestep * 60
         }
-
-        self.route_tracer.trace(self._agent_loc, action == self.grab)
 
         if self.render_mode == "human":
             self.render()
@@ -265,12 +200,7 @@ class FactoryMachinesEnvBase(gym.Env, ABC):
             print(f"Reward: {reward}")
             print(obs)
 
-        return obs, reward, False, False, info
-
-    @abstractmethod
-    def _depot_drop_off(self):
-        """Handle what happens when the agent arrives at the depot."""
-        pass
+        return obs, reward, terminated, False, info
 
     def render(self) -> Optional[Union[RenderFrame, List[RenderFrame]]]:
         len_x = self._len_x
@@ -340,9 +270,6 @@ class FactoryMachinesEnvBase(gym.Env, ABC):
                         )
                     )
 
-        if self.debug_mode:
-            self.route_tracer.render(self.screen, cell_size, self.colors["black"], self.colors["route"])
-
         # Draw agent.
         pygame.draw.circle(
             self.screen,
@@ -352,7 +279,7 @@ class FactoryMachinesEnvBase(gym.Env, ABC):
         )
 
         # Draw text.
-        self._render_info(font, header_origin, screen_width, spacing)
+        self._render_info(font, header_origin)
 
         if self.render_mode == "human":
             pygame.event.pump()
@@ -363,33 +290,10 @@ class FactoryMachinesEnvBase(gym.Env, ABC):
                 np.array(pygame.surfarray.pixels3d(self.screen)), axes=(1, 0, 2)
             )
 
-    def _render_info(self, font, header_origin, screen_width, spacing):
-        # Draw inventory.
-        inv_text = font.render("INV: " + self._format_depots(self._agent_inv), True, self.colors["text"])
-        inv_text_rect = self.screen.blit(inv_text, header_origin)
-
-        # Draw depot queues.
-        depot_text = font.render("DEP: " + self._format_depots(self._get_depot_queues()), True, self.colors["text"])
-        depot_text_rect = self.screen.blit(depot_text, (header_origin[0], inv_text_rect.bottom + spacing))
-
-        # Draw history log.
-        history_text = self._history.render(font, self.colors["text"], width=screen_width)
-        self.screen.blit(history_text, (header_origin[0], depot_text_rect.bottom + spacing))
-
     def close(self):
         if self.screen is not None:
             pygame.display.quit()
             pygame.quit()
-
-    @staticmethod
-    def get_keys_to_action():
-        return {
-            'w': 0,
-            'a': 1,
-            's': 2,
-            'd': 3,
-            'g': 4,
-        }
 
     def _try_grab(self) -> float:
         """
@@ -428,9 +332,124 @@ class FactoryMachinesEnvBase(gym.Env, ABC):
         self._history.log("Agent tried to grab a blank tile.")
         return self._item_pickup_punishment
 
+    def _get_obs(self):
+        local_obs = np.zeros((3, 3))
+
+        a_x, a_y = self._agent_loc
+        for x in range(3):
+            for y in range(3):
+                map_x = a_x + x - 1
+                map_y = a_y + y - 1
+                if self._is_oob(map_x, map_y) or self._map.layout[map_y][map_x] == 'w':
+                    local_obs[y, x] = 1
+
+        return {
+            "agent_loc": self._agent_loc,
+            "agent_obs": local_obs.flatten(),
+            "agent_inv": self._agent_inv,
+            "depot_locs": self._depot_locs.flatten(),
+            "depot_queues": self._get_depot_queues(),
+            "output_loc": self._output_loc,
+            "depot_ages": self._get_depot_ages()
+        }
+
     def _is_oob(self, x: int, y: int):
         return x < 0 or x >= self._len_x or y < 0 or y >= self._len_y
 
+    def _depot_drop_off(self) -> int:
+        # Go through each open order and strike off items the agent holds.
+        # Then, if an order has been completed, move it to the completed pile.
+        reward = 0
+        for i, order in enumerate(self._open_orders.copy()):
+            order_t, order_items = order
+            items_fulfilled = np.minimum(self._agent_inv, order_items)
+            reward += sum(items_fulfilled) * self._item_dropoff_reward
+
+            new_order = order_items - items_fulfilled
+            self._open_orders[i] = (order_t, new_order)
+
+            self._agent_inv -= items_fulfilled
+
+            if sum(new_order) == 0:
+                # Order is complete!
+                order_age = self._timestep - order_t
+                reward += self._reward_per_order + self._sample_age_reward(order_age)
+
+        # Remove complete orders.
+        self._open_orders[:] = [order for order in self._open_orders if sum(order[1]) != 0]
+
+        return reward
+
+    def _get_depot_queues(self):
+        depot_queues = np.zeros(self._num_depots, dtype=int)
+        for order in self._open_orders:
+            _, order_items = order
+            depot_queues += order_items
+
+        return depot_queues
+
+    def _get_depot_ages(self):
+        """Get the age of the oldest open order on the depots."""
+        depot_ages = np.zeros(self._num_depots, dtype=int)
+        for order in self._open_orders:
+            order_t, order_items = order
+            order_age = self._timestep - order_t
+            mask = order_items * order_age
+            depot_ages = np.maximum(depot_ages, mask)
+
+        # Cutoff.
+        depot_ages = self._get_age(depot_ages)
+
+        return depot_ages
+
+    def _get_age(self, order_t: Union[int, np.ndarray]) -> Union[int, np.ndarray]:
+        compression_factor = self._age_max_timesteps / self._age_bands
+
+        if type(order_t) is int:
+            # Cutoff.
+            order_t = np.minimum(order_t, self._age_max_timesteps).item()
+            return math.floor(order_t / compression_factor)
+        elif type(order_t) is np.ndarray:
+            order_t = np.minimum(order_t, self._age_max_timesteps)
+            return np.floor(order_t / compression_factor).astype(int)
+
+        raise RuntimeError("Times are neither int nor ndarray.")
+
+    def _sample_age_reward(self, age: int) -> float:
+        compressed_age = self._get_age(age)
+        reward_ratio = (self._age_bands - compressed_age) / self._age_bands
+        return reward_ratio * self._max_age_reward
+
+    def _render_info(self, font, header_origin):
+
+        # Draw table header.
+        table_rows = [
+            "   | " + ' '.join([f"{f'D{x}':>3}" for x in range(self._num_depots)]),
+            "INV| " + self._add_table_padding(self._agent_inv),
+            "DEP| " + self._add_table_padding(self._get_depot_queues()),
+            "AGE| " + self._add_table_padding(self._get_depot_ages()),
+            "   |",
+        ]
+
+        for order in self._open_orders:
+            order_t, order_items = order
+            table_rows.append(f"{order_t:>3}| " + self._add_table_padding(order_items))
+
+        draw_lines(table_rows, self.screen, header_origin, font, self.colors["text"])
+
     @staticmethod
-    def _format_depots(arr):
-        return ', '.join(map(lambda i: f"D{i[0]}: {i[1]}", enumerate(arr)))
+    def _add_table_padding(arr):
+        return ' '.join(map(lambda i: f"{i:3}", arr))
+
+    def _get_num_completed_orders(self):
+        return self._total_num_orders - (self._num_orders_pending + len(self._open_orders))
+
+    @staticmethod
+    def get_keys_to_action():
+        return {
+            'w': 0,
+            'a': 1,
+            's': 2,
+            'd': 3,
+            'g': 4,
+        }
