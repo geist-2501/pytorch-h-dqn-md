@@ -13,6 +13,7 @@ defaults:
   replay_buffer_size: 10000
   episode_max_timesteps: 1500
   grad_clip: 1
+  loss: 'td'
   q1_loss: 'td'
   q2_loss: 'td'
 
@@ -40,8 +41,8 @@ k_catch_up_disabled_test_map_0:
 
 final_dqn_map_0:
   agent_id: DQN
-  env_id: FMMulti-v0
-  env_wrapper: FMFlattenRel
+  env_id: FactoryMachinesEnv-v0
+  env_wrapper: FlattenRelative
   env_args:
     map_id: '0'
   config:
