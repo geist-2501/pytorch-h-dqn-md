@@ -1,13 +1,14 @@
+import pickle
 from operator import itemgetter
 from typing import Callable, Dict, Tuple, Any, List, Optional
 
-import gym
+import gymnasium as gym
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
 from tqdm import trange, tqdm
-from crete import Agent, ProfileConfig, get_cli_state
+from crete import Agent, ProfileConfig, get_cli_state, SaveCallback
 
 from agents.dqn import DQN, Loss, loss_factory
 from agents.replay_buffer import ReplayBuffer
@@ -86,14 +87,17 @@ class DQNAgent(Agent):
     def parameters(self):
         return self.net.parameters()
 
-    def save(self) -> Dict:
-        return {
+    def save(self) -> bytes:
+        return pickle.dumps({
             "data": self.net.state_dict(),
             "layers": self.net.hidden_layers
-        }
+        })
 
-    def load(self, agent_data: Dict):
-        data, layers = itemgetter("data", "layers")(agent_data)
+    def load(self, agent_data: bytes):
+        agent_dict = pickle.loads(agent_data)
+
+        data, layers = itemgetter("data", "layers")(agent_dict)
+
         self.net.set_hidden_layers(layers)
         self.target_net.set_hidden_layers(layers)
         self.net.load_state_dict(data)
@@ -265,7 +269,7 @@ def dqn_training_wrapper(
         agent: DQNAgent,
         dqn_config: ProfileConfig,
         artifacts: Dict,
-        save_callback
+        save_callback: SaveCallback
 ):
     train_dqn_agent(
         env_factory=env_factory,
